@@ -89,4 +89,9 @@ Body body_position(float declination, float hour_angle_deg, float latitude_deg, 
 // Full evaluation.
 Result evaluate(const Params& params);
 
+// "Sun heat": multipliers for the game's key sunlight color. `heat` is the user setting (0..1) and
+// `sun_intensity` the simulated direct sunlight (0 at night, ~1 at midday), so the effect follows
+// the sun and vanishes after dusk. Brightens the light and pushes it toward warm yellow-orange.
+Rgb heat_multipliers(float heat, float sun_intensity);
+
 }  // namespace solar

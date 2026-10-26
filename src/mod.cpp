@@ -5,6 +5,9 @@
 // Rayleigh + Mie + ozone atmosphere. The result is exported as SunService so other lighting mods
 // (shadow_mod, ao_mod, ...) can share one light, and is optionally written back into the game's
 // sun/moon positions so the sky sprite, lens flare and the game's own base light follow it.
+//
+// "Sun Heat" brightens and warms the game's key sunlight (palette light 0, "dif0") during the
+// day, scaled by the simulated sun so it fades out at dusk.
 
 #include "global.h"
 
@@ -47,11 +50,27 @@ ConfigVarHandle g_cvarTurbidity = 0;  // x10
 ConfigVarHandle g_cvarMoonPhase = 0;
 ConfigVarHandle g_cvarMoonCycle = 0;
 ConfigVarHandle g_cvarMoonBrightness = 0;  // percent of the zenith sun
+ConfigVarHandle g_cvarSunHeat = 0;         // percent
 
 UiWindowHandle g_controlsWindow = 0;
 
 DEFINE_HOOK(&dScnKy_env_light_c::setSunpos, EnvSetSunpos);
 DEFINE_HOOK(&dScnKy_env_light_c::SetBaseLight, EnvSetBaseLight);
+DEFINE_HOOK(&dScnKy_env_light_c::setLight_actor, EnvSetLightActor);
+DEFINE_HOOK(&dScnKy_env_light_c::setLight_bg, EnvSetLightBg);
+
+// Sun heat multipliers for this frame (computed once per frame in mod_update).
+struct HeatState {
+    bool on = false;
+    float mul[3] = {1.0f, 1.0f, 1.0f};
+};
+HeatState g_heat;
+
+// Key light color before the game's setLight_* call. The color is replaced by a sentinel during
+// the call so a skipped rewrite can be told apart from one that wrote the same value.
+GXColor g_keyLightBefore = {0, 0, 0, 0};
+bool g_sentinelArmed = false;
+constexpr u8 kSentinel[3] = {1, 2, 3};
 
 int64_t get_int(ConfigVarHandle handle, int64_t fallback) {
     int64_t value = fallback;
@@ -248,6 +267,64 @@ void on_set_base_light_post(ModContext*, void* args, void*, void*) {
     env->base_light.mPosition.z = eye.z + r.light_dir.z * kSkyDistance;
 }
 
+// --- Sun heat -----------------------------------------------------------------------------------
+
+void update_heat() {
+    g_heat = HeatState{};
+    const float heat =
+        static_cast<float>(std::clamp<int64_t>(get_int(g_cvarSunHeat, 0), 0, 100)) / 100.0f;
+    if (heat <= 0.0f || !simulation_enabled() || !dKy_SunMoon_Light_Check() || dKy_darkworld_check()) {
+        return;
+    }
+    const solar::Result r = solar::evaluate(build_params(game_clock_hours()));
+    const solar::Rgb mul = solar::heat_multipliers(heat, r.sun_intensity);
+    g_heat.mul[0] = mul.r;
+    g_heat.mul[1] = mul.g;
+    g_heat.mul[2] = mul.b;
+    g_heat.on = mul.r > 1.001f;
+}
+
+GXColor& key_light_color(dKy_tevstr_c* tevstr) {
+    return tevstr->mLights[0].getLightInfo()->mColor;
+}
+
+u8 scale_channel(u8 value, float mul) {
+    return static_cast<u8>(std::clamp(static_cast<float>(value) * mul + 0.5f, 0.0f, 255.0f));
+}
+
+HookAction on_set_light_pre(ModContext*, void* args, void*, void*) {
+    g_sentinelArmed = g_heat.on;
+    if (g_sentinelArmed) {
+        GXColor& color = key_light_color(mods::arg<dKy_tevstr_c*>(args, 1));
+        g_keyLightBefore = color;
+        color.r = kSentinel[0];
+        color.g = kSentinel[1];
+        color.b = kSentinel[2];
+    }
+    return HOOK_CONTINUE;
+}
+
+// setLight_actor/setLight_bg rebuild the palette lights from scratch, except when no palette
+// applies; then they leave the previous (already heated) color alone. Only heat a color the game
+// just wrote, so the boost never compounds frame over frame.
+void on_set_light_post(ModContext*, void* args, void*, void*) {
+    if (!g_sentinelArmed) {
+        return;
+    }
+    g_sentinelArmed = false;
+    GXColor& color = key_light_color(mods::arg<dKy_tevstr_c*>(args, 1));
+    if (color.r == kSentinel[0] && color.g == kSentinel[1] && color.b == kSentinel[2]) {
+        // Not rewritten: put back what was there (already heated last time it was written).
+        color.r = g_keyLightBefore.r;
+        color.g = g_keyLightBefore.g;
+        color.b = g_keyLightBefore.b;
+        return;
+    }
+    color.r = scale_channel(color.r, g_heat.mul[0]);
+    color.g = scale_channel(color.g, g_heat.mul[1]);
+    color.b = scale_channel(color.b, g_heat.mul[2]);
+}
+
 // --- UI ---------------------------------------------------------------------------------------
 
 void add_control(UiElementHandle pane, const UiControlDesc& desc) {
@@ -309,6 +386,12 @@ ModResult build_controls_tab(
     add_toggle(left, "Drive Game Sun", g_cvarDriveGame,
         "Moves the game's sun and moon (sky sprites, lens flare, base light) to the simulated "
         "positions.");
+
+    svc_ui->pane_add_section(mod_ctx, left, "Sunlight");
+    add_number(left, "Sun Heat", g_cvarSunHeat, 0, 100, 5, "%",
+        "Makes daylight stronger and warmer for a hot-day feel: up to 60% brighter and shifted "
+        "toward yellow-orange at midday. Follows the sun, so it fades at dusk and is off at night "
+        "and indoors.");
 
     svc_ui->pane_add_section(mod_ctx, left, "Location & Season");
     add_number(left, "Latitude", g_cvarLatitude, -89, 89, 1, " deg",
@@ -432,6 +515,7 @@ MOD_EXPORT ModResult mod_initialize(ModError* error) {
         {"turbidity", 25, &g_cvarTurbidity},
         {"moonPhase", 15, &g_cvarMoonPhase},
         {"moonBrightness", 8, &g_cvarMoonBrightness},
+        {"sunHeat", 0, &g_cvarSunHeat},
     };
     for (const auto& opt : bools) {
         if (const ModResult r = register_bool(opt.name, opt.def, *opt.handle, error); r != MOD_OK) {
@@ -449,6 +533,13 @@ MOD_EXPORT ModResult mod_initialize(ModError* error) {
     {
         return mods::set_error(error, MOD_ERROR, "failed to hook the game's sun");
     }
+    if (mods::hook::add_pre<EnvSetLightActor>(on_set_light_pre) != MOD_OK ||
+        mods::hook::add_post<EnvSetLightActor>(on_set_light_post) != MOD_OK ||
+        mods::hook::add_pre<EnvSetLightBg>(on_set_light_pre) != MOD_OK ||
+        mods::hook::add_post<EnvSetLightBg>(on_set_light_post) != MOD_OK)
+    {
+        svc_log->warn(mod_ctx, "could not hook the game's light colors; Sun Heat is unavailable");
+    }
 
     UiModsPanelDesc panelDesc = UI_MODS_PANEL_DESC_INIT;
     panelDesc.build = build_panel;
@@ -457,6 +548,7 @@ MOD_EXPORT ModResult mod_initialize(ModError* error) {
 }
 
 MOD_EXPORT ModResult mod_update(ModError*) {
+    update_heat();
     return MOD_OK;
 }
 
@@ -465,7 +557,8 @@ MOD_EXPORT ModResult mod_shutdown(ModError*) {
     // original arc returns on its own.
     g_cvarEnabled = g_cvarDriveGame = g_cvarLatitude = g_cvarDayOfYear = 0;
     g_cvarDaysPerGameDay = g_cvarNorthYaw = g_cvarTurbidity = 0;
-    g_cvarMoonPhase = g_cvarMoonCycle = g_cvarMoonBrightness = 0;
+    g_cvarMoonPhase = g_cvarMoonCycle = g_cvarMoonBrightness = g_cvarSunHeat = 0;
+    g_heat = HeatState{};
     g_controlsWindow = 0;
     return MOD_OK;
 }

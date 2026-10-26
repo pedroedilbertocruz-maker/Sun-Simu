@@ -264,4 +264,10 @@ Result evaluate(const Params& params) {
     return r;
 }
 
+Rgb heat_multipliers(float heat, float sunIntensity) {
+    const float f = clamp01(heat) * clamp01(sunIntensity);
+    const float gain = 1.0f + 0.6f * f;  // up to +60% brighter at full heat, midday
+    return Rgb{gain, gain * (1.0f - 0.07f * f), gain * (1.0f - 0.22f * f)};
+}
+
 }  // namespace solar

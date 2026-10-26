@@ -5,6 +5,7 @@ Sol e lua fisicamente baseados para o [Dusklight](https://twilitrealm.dev/).
 - **Posição:** calculada a partir da latitude, do dia do ano e do relógio do jogo, com refração atmosférica.
 - **Cor e intensidade:** vêm de uma atmosfera Rayleigh + Mie + ozônio. O sol fica branco ao meio-dia e laranja ou vermelho no horizonte, e o céu tem tom azulado e brilho de crepúsculo.
 - **Lua:** tem fases, e à noite passa a ser a luz dominante.
+- **Sun Heat:** deixa a luz do dia mais forte e mais quente (até 60% mais brilho, puxando para amarelo-alaranjado ao meio-dia), para dar sensação de calor. O efeito acompanha o sol: diminui no fim da tarde e some à noite e em ambientes internos. Fica em 0% por padrão e é ajustado no painel do mod, em Sunlight.
 - **Sol do jogo:** o mod move o sol e a lua do próprio jogo (sprite, lens flare e luz base) para as posições simuladas.
 - **Serviço para outros mods:** exporta o `SunService` (`com.sunsim.sun`), que outros mods de iluminação podem importar.
 
