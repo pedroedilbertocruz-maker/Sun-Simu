@@ -1,6 +1,7 @@
 {
   "id": "com.sunsim.sun_mod",
   "name": "Sun Simulation",
-  "version": "0.1.0",
+  "version": "@PROJECT_VERSION@",
+  "author": "pedroedilbertocruz-maker",
   "description": "Physically based sun and moon: position from latitude, season and the in-game clock, color and intensity from a Rayleigh/Mie atmosphere. Drives the game's sun and publishes a SunService for other lighting mods such as dynamic shadows."
 }
