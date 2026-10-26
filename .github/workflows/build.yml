@@ -17,30 +17,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: linux-x86_64
-            runner: ubuntu-latest
-          - platform: linux-aarch64
-            runner: ubuntu-24.04-arm
-          - platform: macos-arm64
-            runner: macos-latest
-          - platform: macos-x86_64
-            runner: macos-latest
-            cmake_args: -DCMAKE_OSX_ARCHITECTURES=x86_64
-          - platform: ios-arm64
-            runner: macos-latest
-            cmake_args: >-
-              -DCMAKE_SYSTEM_NAME=iOS
-              -DCMAKE_OSX_ARCHITECTURES=arm64
-              -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0
           - platform: windows-amd64
             runner: windows-latest
             msvc_arch: amd64
-          - platform: windows-arm64
-            runner: windows-latest
-            msvc_arch: amd64_arm64
-          - platform: android-aarch64
-            runner: ubuntu-latest
-            android_ndk: "29.0.14206865"
 
     steps:
       - uses: actions/checkout@v7
@@ -83,7 +62,16 @@ jobs:
           cmake -B build "${args[@]}"
 
       - name: Build
-        run: cmake --build build --parallel
+        shell: bash
+        run: |
+          set -o pipefail
+          cmake --build build --parallel -- -k 0 2>&1 | tee build.log
+
+      - name: Report errors
+        if: failure()
+        shell: bash
+        run: |
+          grep -iE "error|unresolved|LNK[0-9]|C[0-9]{4}:" build.log | grep -v "Werror" | head -40 | while IFS= read -r line; do echo "::error::${line:0:900}"; done
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
@@ -92,42 +80,3 @@ jobs:
           path: build/mods/*.dusk
           if-no-files-found: error
 
-  combine:
-    name: Combine bundles
-    needs: build
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Download platform bundles
-        uses: actions/download-artifact@v8
-        with:
-          pattern: mod-*
-          path: dist
-
-      - name: Install symgen
-        run: |
-          curl -fsSL -o symgen \
-            "https://github.com/encounter/symgen/releases/download/${SYMGEN_VERSION}/symgen-linux-x86_64"
-          chmod +x symgen
-
-      - name: Merge bundles
-        run: |
-          name=$(basename dist/mod-linux-x86_64/*.dusk)
-          python3 tools/merge_mod.py -o "combined/$name" --symgen ./symgen \
-            dist/*/*.dusk
-
-      - name: Upload combined bundle
-        uses: actions/upload-artifact@v7
-        with:
-          name: mod-combined
-          path: combined/*.dusk
-          if-no-files-found: error
-
-      - name: Attach to release
-        if: startsWith(github.ref, 'refs/tags/')
-        env:
-          GH_TOKEN: ${{github.token}}
-        run: gh release create "$GITHUB_REF_NAME" combined/*.dusk --verify-tag --generate-notes
