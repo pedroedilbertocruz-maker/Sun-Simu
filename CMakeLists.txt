@@ -27,3 +27,10 @@ add_mod(sun_mod
 )
 # Public service header (SunService), shared with consumer mods such as dynamic shadows.
 target_include_directories(sun_mod PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")
+
+# MSVC reports __cplusplus as 199711L unless told otherwise, and the game's dolphin/types.h then
+# does `#define nullptr NULL`, breaking the C++ standard library. The full Dusklight build passes
+# this flag, but the standalone mod SDK does not.
+if (MSVC)
+    target_compile_options(sun_mod PRIVATE /Zc:__cplusplus)
+endif ()
